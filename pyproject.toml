@@ -1,0 +1,10 @@
+[project]
+name = "pixieset-downloader"
+version = "0.2.0"
+description = "Python script to download all images from a Pixieset gallery at the highest available resolution."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiohttp>=3.13.3",
+    "playwright>=1.58.0",
+]
