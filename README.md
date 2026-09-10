@@ -42,6 +42,7 @@ uv run python downloader.py --url "https://example.pixieset.com/my-gallery/" --p
 | `--password`      | No       | —              | Gallery password (if protected). Visible in shell history/process list — prefer `--ask-password` |
 | `--ask-password`  | No       | —              | Prompt for the password securely instead of passing it on the command line |
 | `--output`        | No       | `./downloads`  | Folder where images are saved            |
+| `--filename`      | No       | —              | Use this string as the base filename for every photo (`NNNN-BASENAME.ext`); overrides the name Pixieset embeds in the page |
 | `--concurrent`    | No       | `5`            | Number of simultaneous downloads         |
 | `--dry-run`       | No       | —              | List found image URLs without downloading|
 | `--verbose`       | No       | —              | Enable debug logging                     |
@@ -59,11 +60,15 @@ uv run python downloader.py --url "https://example.pixieset.com/wedding/" --conc
 # Preview URLs without downloading
 uv run python downloader.py --url "https://example.pixieset.com/wedding/" --dry-run
 
+# Use a custom base filename for every photo (e.g. 0001-wedding-smith.jpg, 0002-wedding-smith.jpg, ...)
+uv run python downloader.py --url "https://example.pixieset.com/wedding/" --filename wedding-smith
+
 # All options combined
 uv run python downloader.py \
   --url "https://example.pixieset.com/wedding/" \
   --password "secret" \
   --output ./wedding-photos \
+  --filename wedding-smith \
   --concurrent 8
 ```
 
@@ -76,8 +81,9 @@ uv run python downloader.py \
    - Intercepting HTTP responses from the Pixieset CDN in real time.
    - Extracting DOM attributes (`src`, `data-src`, `data-original`, `data-lazy`, `data-image`, `background-image`).
    - Scanning inline scripts and embedded JSON data on the page.
-5. **Resolution maximization** — Pixieset uses size suffixes in its URLs (`-small`, `-medium`, `-large`, `-xlarge`, `-xxlarge`). The script replaces any suffix with `-xxlarge` to get the highest resolution version. If the server responds with 403/404, it falls back to the original suffix.
-6. **Concurrent download** — Downloads images in parallel using `aiohttp` with a semaphore to limit concurrency. Includes automatic retries with exponential backoff.
+5. **Filename numbering** — Photos are saved in the same order they appear on the gallery page, prefixed with a zero-padded index (`0001-`, `0002-`, ...). The base name comes from the original filename Pixieset embeds in the page when available, falling back to a URL-derived name, or from `--filename` if provided (applied to every photo, still indexed). The gallery's cover/hero photo is excluded from this numbering and saved simply as `cover.jpg`.
+6. **Resolution maximization** — Pixieset uses size suffixes in its URLs (`-small`, `-medium`, `-large`, `-xlarge`, `-xxlarge`). The script replaces any suffix with `-xxlarge` to get the highest resolution version. If the server responds with 403/404, it falls back to the original suffix.
+7. **Concurrent download** — Downloads images in parallel using `aiohttp` with a semaphore to limit concurrency. Includes automatic retries with exponential backoff.
 
 ## Project structure
 

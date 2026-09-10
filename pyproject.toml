@@ -1,6 +1,6 @@
 [project]
 name = "pixieset-downloader"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python script to download all images from a Pixieset gallery at the highest available resolution."
 readme = "README.md"
 requires-python = ">=3.14"

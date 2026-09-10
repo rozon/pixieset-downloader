@@ -90,15 +90,162 @@ def test_extract_urls_from_dom_sync_collects_known_attributes():
     <img src="https://unrelated.example.com/logo.jpg">
     """
     urls = d.extract_urls_from_dom_sync(html)
-    assert urls == {
+    assert urls == [
         "https://cdn.pixieset.com/a/photo1.jpg",
         "https://cdn.pixieset.com/a/photo2.jpg",
         "https://cdn.pixieset.com/a/photo3.jpg",
-    }
+    ]
 
 
 def test_extract_urls_from_dom_sync_empty_html():
-    assert d.extract_urls_from_dom_sync("") == set()
+    assert d.extract_urls_from_dom_sync("") == []
+
+
+# --- build_output_filename ------------------------------------------------
+
+
+def test_build_output_filename_uses_url_derived_name_by_default():
+    name = d.build_output_filename("https://foo.pixieset.com/a/photo.jpg", None, 1, 1)
+    assert name == "0001-photo.jpg"
+
+
+def test_build_output_filename_prefers_dom_filename():
+    name = d.build_output_filename("https://foo.pixieset.com/a/photo.jpg", "IMG_1234.jpg", 1, 1)
+    assert name == "0001-IMG_1234.jpg"
+
+
+def test_build_output_filename_dom_filename_wrong_extension_uses_real_url_extension():
+    name = d.build_output_filename("https://foo.pixieset.com/a/photo.jpg", "IMG_1234.CR2", 1, 1)
+    assert name == "0001-IMG_1234.jpg"
+
+
+def test_build_output_filename_override_basename_wins_over_dom_filename():
+    name = d.build_output_filename(
+        "https://foo.pixieset.com/a/photo.jpg", "IMG_1234.jpg", 1, 1, override_basename="vacation"
+    )
+    assert name == "0001-vacation.jpg"
+
+
+def test_build_output_filename_override_reused_across_indices():
+    first = d.build_output_filename(
+        "https://foo.pixieset.com/a/a.jpg", None, 1, 2, override_basename="vacation"
+    )
+    second = d.build_output_filename(
+        "https://foo.pixieset.com/a/b.jpg", None, 2, 2, override_basename="vacation"
+    )
+    assert first == "0001-vacation.jpg"
+    assert second == "0002-vacation.jpg"
+
+
+def test_build_output_filename_zero_pads_to_four_digits_by_default():
+    name = d.build_output_filename("https://foo.pixieset.com/a/photo.jpg", None, 3, 7)
+    assert name == "0003-photo.jpg"
+
+
+def test_build_output_filename_widens_padding_beyond_9999():
+    name = d.build_output_filename("https://foo.pixieset.com/a/photo.jpg", None, 5, 12000)
+    assert name == "00005-photo.jpg"
+
+
+def test_build_output_filename_sanitizes_unsafe_characters():
+    name = d.build_output_filename("https://foo.pixieset.com/a/photo.jpg", "../../etc/passwd", 1, 1)
+    assert name == "0001-passwd.jpg"
+
+
+def test_build_output_filename_cover_ignores_index_override_and_dom_filename():
+    name = d.build_output_filename(
+        "https://foo.pixieset.com/a/hash-cover-large.jpg",
+        "IMG_1234.jpg",
+        7,
+        50,
+        override_basename="vacation",
+        is_cover=True,
+    )
+    assert name == "cover.jpg"
+
+
+# --- is_cover_url ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://foo.pixieset.com/a/hash-cover.jpg",
+        "https://foo.pixieset.com/a/hash-cover-large.jpg",
+        "https://foo.pixieset.com/a/hash-cover-xxlarge.jpg",
+    ],
+)
+def test_is_cover_url_matches_cover_pattern(url):
+    assert d.is_cover_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://foo.pixieset.com/a/hash-large.jpg",
+        "https://foo.pixieset.com/a/hash.jpg",
+        "https://foo.pixieset.com/a/photo.jpg",
+    ],
+)
+def test_is_cover_url_rejects_regular_photo_urls(url):
+    assert not d.is_cover_url(url)
+
+
+# --- merge_ordered_images --------------------------------------------------
+
+
+def test_merge_ordered_images_preserves_dom_order_and_dedups_first_occurrence():
+    dom_images = [
+        {"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": "IMG_1.jpg"},
+        {"url": "https://cdn.pixieset.com/a/photo2.jpg", "filename": None},
+        {"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": None},  # duplicate, no upgrade needed
+    ]
+    result = d.merge_ordered_images(dom_images, [])
+    assert result == [
+        ("https://cdn.pixieset.com/a/photo1.jpg", "IMG_1.jpg", False),
+        ("https://cdn.pixieset.com/a/photo2.jpg", None, False),
+    ]
+
+
+def test_merge_ordered_images_upgrades_none_filename_on_later_duplicate():
+    dom_images = [
+        {"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": None},
+        {"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": "IMG_1.jpg"},
+    ]
+    result = d.merge_ordered_images(dom_images, [])
+    assert result == [("https://cdn.pixieset.com/a/photo1.jpg", "IMG_1.jpg", False)]
+
+
+def test_merge_ordered_images_appends_extra_urls_without_duplicating():
+    dom_images = [{"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": None}]
+    extra_urls = ["https://cdn.pixieset.com/a/photo1.jpg", "https://cdn.pixieset.com/a/photo2.jpg"]
+    result = d.merge_ordered_images(dom_images, extra_urls)
+    assert result == [
+        ("https://cdn.pixieset.com/a/photo1.jpg", None, False),
+        ("https://cdn.pixieset.com/a/photo2.jpg", None, False),
+    ]
+
+
+def test_merge_ordered_images_filters_skip_listed_and_non_matching_urls():
+    dom_images = [
+        {"url": "https://cdn.pixieset.com/a/logo.jpg", "filename": None},
+        {"url": "https://unrelated.example.com/photo.jpg", "filename": None},
+        {"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": None},
+    ]
+    result = d.merge_ordered_images(dom_images, [])
+    assert result == [("https://cdn.pixieset.com/a/photo1.jpg", None, False)]
+
+
+def test_merge_ordered_images_flags_cover_urls():
+    dom_images = [
+        {"url": "https://cdn.pixieset.com/a/hash-cover.jpg", "filename": None},
+        {"url": "https://cdn.pixieset.com/a/photo1.jpg", "filename": "IMG_1.jpg"},
+    ]
+    result = d.merge_ordered_images(dom_images, [])
+    assert result == [
+        ("https://cdn.pixieset.com/a/hash-cover.jpg", None, True),
+        ("https://cdn.pixieset.com/a/photo1.jpg", "IMG_1.jpg", False),
+    ]
 
 
 # --- download_image / download_all (fake aiohttp session) ----------------
@@ -152,24 +299,24 @@ async def test_download_image_writes_file_on_success(tmp_path):
     session = FakeSession({url: FakeResponse(200, body=b"fake-image-bytes")})
     semaphore = asyncio.Semaphore(1)
 
-    ok = await d.download_image(session, url, tmp_path, semaphore, 1, 1, max_retries=1)
+    ok = await d.download_image(session, url, None, tmp_path, semaphore, 1, 1, max_retries=1)
 
     assert ok is True
-    assert (tmp_path / "photo.jpg").read_bytes() == b"fake-image-bytes"
+    assert (tmp_path / "0001-photo.jpg").read_bytes() == b"fake-image-bytes"
 
 
 @pytest.mark.asyncio
 async def test_download_image_avoids_overwriting_existing_file(tmp_path):
     url = "https://cdn.pixieset.com/a/photo-xxlarge.jpg"
-    (tmp_path / "photo.jpg").write_bytes(b"already-here")
+    (tmp_path / "0001-photo.jpg").write_bytes(b"already-here")
     session = FakeSession({url: FakeResponse(200, body=b"new-bytes")})
     semaphore = asyncio.Semaphore(1)
 
-    ok = await d.download_image(session, url, tmp_path, semaphore, 1, 1, max_retries=1)
+    ok = await d.download_image(session, url, None, tmp_path, semaphore, 1, 1, max_retries=1)
 
     assert ok is True
-    assert (tmp_path / "photo.jpg").read_bytes() == b"already-here"
-    assert (tmp_path / "photo_1.jpg").read_bytes() == b"new-bytes"
+    assert (tmp_path / "0001-photo.jpg").read_bytes() == b"already-here"
+    assert (tmp_path / "0001-photo_1.jpg").read_bytes() == b"new-bytes"
 
 
 @pytest.mark.asyncio
@@ -178,10 +325,22 @@ async def test_download_image_returns_false_on_404_without_retry(tmp_path):
     session = FakeSession({url: FakeResponse(404)})
     semaphore = asyncio.Semaphore(1)
 
-    ok = await d.download_image(session, url, tmp_path, semaphore, 1, 1, max_retries=3)
+    ok = await d.download_image(session, url, None, tmp_path, semaphore, 1, 1, max_retries=3)
 
     assert ok is False
     assert session.requested_urls == [url]  # no retries on 404
+
+
+@pytest.mark.asyncio
+async def test_download_image_cover_writes_plain_cover_filename(tmp_path):
+    url = "https://cdn.pixieset.com/a/hash-cover-xxlarge.jpg"
+    session = FakeSession({url: FakeResponse(200, body=b"cover-bytes")})
+    semaphore = asyncio.Semaphore(1)
+
+    ok = await d.download_image(session, url, None, tmp_path, semaphore, 0, 0, is_cover=True, max_retries=1)
+
+    assert ok is True
+    assert (tmp_path / "cover.jpg").read_bytes() == b"cover-bytes"
 
 
 class RaisingResponse(FakeResponse):
@@ -216,7 +375,42 @@ async def test_download_all_continues_after_one_unexpected_failure(tmp_path, mon
 
     monkeypatch.setattr(d.aiohttp, "ClientSession", lambda: FakeClientSessionFactory())
 
-    await d.download_all([good_url, bad_url], tmp_path, concurrent=2)
+    await d.download_all([(good_url, None, False), (bad_url, None, False)], tmp_path, concurrent=2)
 
-    assert (tmp_path / "good.jpg").read_bytes() == b"good-bytes"
-    assert not (tmp_path / "bad.jpg").exists()
+    assert (tmp_path / "0001-good.jpg").read_bytes() == b"good-bytes"
+    assert not (tmp_path / "0002-bad.jpg").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_all_numbers_photos_without_shifting_for_cover(tmp_path, monkeypatch):
+    """A cover entry should not consume an index slot from the real photos."""
+    cover_url = "https://cdn.pixieset.com/a/hash-cover-xxlarge.jpg"
+    photo1_url = "https://cdn.pixieset.com/a/photo1-xxlarge.jpg"
+    photo2_url = "https://cdn.pixieset.com/a/photo2-xxlarge.jpg"
+
+    session = FakeSession(
+        {
+            cover_url: FakeResponse(200, body=b"cover-bytes"),
+            photo1_url: FakeResponse(200, body=b"photo1-bytes"),
+            photo2_url: FakeResponse(200, body=b"photo2-bytes"),
+        }
+    )
+
+    class FakeClientSessionFactory:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(d.aiohttp, "ClientSession", lambda: FakeClientSessionFactory())
+
+    await d.download_all(
+        [(cover_url, None, True), (photo1_url, None, False), (photo2_url, None, False)],
+        tmp_path,
+        concurrent=2,
+    )
+
+    assert (tmp_path / "cover.jpg").read_bytes() == b"cover-bytes"
+    assert (tmp_path / "0001-photo1.jpg").read_bytes() == b"photo1-bytes"
+    assert (tmp_path / "0002-photo2.jpg").read_bytes() == b"photo2-bytes"
