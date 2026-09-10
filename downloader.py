@@ -19,11 +19,12 @@ import os
 import re
 import sys
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import unquote, urlparse
 
 import aiohttp
-from playwright.async_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError, async_playwright
-
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 
 logger = logging.getLogger("pixieset_downloader")
 
@@ -38,9 +39,7 @@ SIZE_SUFFIX_PATTERN = re.compile(
     rf"(-(?:{SIZE_SUFFIX_ALTERNATION}))\.(jpg|jpeg|png|webp|gif)",
     re.IGNORECASE,
 )
-SIZE_SUFFIX_STRIP_PATTERN = re.compile(
-    rf"-(?:{SIZE_SUFFIX_ALTERNATION})\.", re.IGNORECASE
-)
+SIZE_SUFFIX_STRIP_PATTERN = re.compile(rf"-(?:{SIZE_SUFFIX_ALTERNATION})\.", re.IGNORECASE)
 
 
 def maximize_resolution(url: str) -> tuple[str, str]:
@@ -82,7 +81,7 @@ async def enter_password(page, password: str) -> None:
         pwd_input = await page.wait_for_selector(
             'input[type="password"], input[type="text"][name*="password"], '
             'input[placeholder*="password" i], input[placeholder*="contraseña" i], '
-            'input.collection-password-input',
+            "input.collection-password-input",
             timeout=10_000,
         )
         if pwd_input:
@@ -148,9 +147,7 @@ async def collect_image_urls(page, url: str, password: str | None) -> list[str]:
         req_url = response.url
         if PIXIESET_CDN_PATTERN.match(req_url):
             content_type = response.headers.get("content-type", "")
-            if "image" in content_type or re.search(
-                r"\.(jpg|jpeg|png|webp|gif)", req_url, re.IGNORECASE
-            ):
+            if "image" in content_type or re.search(r"\.(jpg|jpeg|png|webp|gif)", req_url, re.IGNORECASE):
                 intercepted_urls.add(req_url)
 
     page.on("response", on_response)
@@ -243,9 +240,9 @@ async def download_image(
                             return True
                         elif resp.status in (403, 404):
                             return False  # Don't retry on 403/404
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            except (TimeoutError, aiohttp.ClientError) as e:
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                 else:
                     logger.warning("  [%d/%d] Failed after %d retries: %s", index, total, max_retries, e)
             except OSError as e:
@@ -272,8 +269,7 @@ async def download_all(urls: list[str], output_dir: Path, concurrent: int) -> No
 
     async with aiohttp.ClientSession() as session:
         tasks = [
-            download_image(session, url, output_dir, semaphore, i + 1, total)
-            for i, url in enumerate(urls)
+            download_image(session, url, output_dir, semaphore, i + 1, total) for i, url in enumerate(urls)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -295,8 +291,18 @@ async def main() -> None:
         description="Download all images from a Pixieset gallery at maximum resolution."
     )
     parser.add_argument("--url", required=True, help="Pixieset gallery URL")
-    parser.add_argument("--password", default=None, help="Gallery password (if protected). Exposed in shell history/process list — prefer --ask-password.")
-    parser.add_argument("--ask-password", action="store_true", help="Prompt for the gallery password securely instead of passing it on the command line")
+    parser.add_argument(
+        "--password",
+        default=None,
+        help=(
+            "Gallery password (if protected). Exposed in shell history/process list — prefer --ask-password."
+        ),
+    )
+    parser.add_argument(
+        "--ask-password",
+        action="store_true",
+        help="Prompt for the gallery password securely instead of passing it on the command line",
+    )
     parser.add_argument("--output", default="./downloads", help="Output directory (default: ./downloads)")
     parser.add_argument("--concurrent", type=int, default=5, help="Concurrent downloads (default: 5)")
     parser.add_argument("--dry-run", action="store_true", help="List found image URLs without downloading")
@@ -333,7 +339,10 @@ async def main() -> None:
             await browser.close()
 
     if not urls:
-        logger.error("No images found. The gallery may be empty, the URL may be wrong, or the password may be incorrect.")
+        logger.error(
+            "No images found. The gallery may be empty, the URL may be wrong, "
+            "or the password may be incorrect."
+        )
         sys.exit(1)
 
     if args.dry_run:
