@@ -36,13 +36,16 @@ uv run python downloader.py --url "https://example.pixieset.com/my-gallery/" --p
 
 ### Available options
 
-| Argument       | Required | Default        | Description                              |
-|----------------|----------|----------------|------------------------------------------|
-| `--url`        | Yes      | —              | Pixieset gallery URL                     |
-| `--password`   | No       | —              | Gallery password (if protected)          |
-| `--output`     | No       | `./downloads`  | Folder where images are saved            |
-| `--concurrent` | No       | `5`            | Number of simultaneous downloads         |
-| `--dry-run`    | No       | —              | List found image URLs without downloading|
+| Argument          | Required | Default        | Description                              |
+|-------------------|----------|----------------|-------------------------------------------|
+| `--url`           | Yes      | —              | Pixieset gallery URL                     |
+| `--password`      | No       | —              | Gallery password (if protected). Visible in shell history/process list — prefer `--ask-password` |
+| `--ask-password`  | No       | —              | Prompt for the password securely instead of passing it on the command line |
+| `--output`        | No       | `./downloads`  | Folder where images are saved            |
+| `--concurrent`    | No       | `5`            | Number of simultaneous downloads         |
+| `--dry-run`       | No       | —              | List found image URLs without downloading|
+| `--verbose`       | No       | —              | Enable debug logging                     |
+| `--quiet`         | No       | —              | Only log warnings and errors             |
 
 ### Examples
 
