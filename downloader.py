@@ -13,6 +13,8 @@ Usage:
 
 import argparse
 import asyncio
+import getpass
+import logging
 import os
 import re
 import sys
@@ -20,18 +22,24 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 import aiohttp
-from playwright.async_api import async_playwright
+from playwright.async_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError, async_playwright
 
+
+logger = logging.getLogger("pixieset_downloader")
 
 PIXIESET_CDN_PATTERN = re.compile(
-    r"https?://[^\"'\s]+\.pixi(?:eset)?\.com/[^\"'\s]+\.(?:jpg|jpeg|png|webp|gif)",
+    r"https?://(?:[\w-]+\.)*pixi(?:eset)?\.com/[^\"'\s]+\.(?:jpg|jpeg|png|webp|gif)",
     re.IGNORECASE,
 )
 
-SIZE_SUFFIXES = ["-small", "-medium", "-large", "-xlarge", "-xxlarge"]
+SIZE_SUFFIX_NAMES = ("small", "medium", "large", "xlarge", "xxlarge")
+SIZE_SUFFIX_ALTERNATION = "|".join(SIZE_SUFFIX_NAMES)
 SIZE_SUFFIX_PATTERN = re.compile(
-    r"(-(?:small|medium|large|xlarge|xxlarge))\.(jpg|jpeg|png|webp|gif)",
+    rf"(-(?:{SIZE_SUFFIX_ALTERNATION}))\.(jpg|jpeg|png|webp|gif)",
     re.IGNORECASE,
+)
+SIZE_SUFFIX_STRIP_PATTERN = re.compile(
+    rf"-(?:{SIZE_SUFFIX_ALTERNATION})\.", re.IGNORECASE
 )
 
 
@@ -62,15 +70,13 @@ def extract_filename(url: str) -> str:
     path = unquote(parsed.path)
     filename = os.path.basename(path)
     # Remove size suffixes from filename for cleanliness
-    filename = re.sub(
-        r"-(?:small|medium|large|xlarge|xxlarge)\.", ".", filename, flags=re.IGNORECASE
-    )
+    filename = SIZE_SUFFIX_STRIP_PATTERN.sub(".", filename)
     return filename or "image.jpg"
 
 
 async def enter_password(page, password: str) -> None:
     """Detect and submit gallery password."""
-    print(f"Attempting to enter gallery password...")
+    logger.info("Attempting to enter gallery password...")
     try:
         # Wait for password input to appear
         pwd_input = await page.wait_for_selector(
@@ -93,15 +99,16 @@ async def enter_password(page, password: str) -> None:
                 await pwd_input.press("Enter")
             # Wait for navigation / gallery load
             await page.wait_for_load_state("networkidle", timeout=15_000)
-            print("Password accepted.")
-    except Exception as e:
-        print(f"Warning: Password entry issue — {e}")
-        print("The gallery may be public or the password form was not found.")
+            logger.info("Password accepted.")
+    except PlaywrightTimeoutError:
+        logger.warning("No password form found — the gallery may be public.")
+    except PlaywrightError as e:
+        logger.warning("Password entry issue: %s", e)
 
 
 async def auto_scroll(page) -> None:
     """Scroll down the page incrementally to trigger lazy loading."""
-    print("Scrolling page to load all images...")
+    logger.info("Scrolling page to load all images...")
     previous_height = 0
     stale_count = 0
     while stale_count < 5:
@@ -149,12 +156,19 @@ async def collect_image_urls(page, url: str, password: str | None) -> list[str]:
     page.on("response", on_response)
 
     # Navigate
-    print(f"Navigating to {url} ...")
-    await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+    logger.info("Navigating to %s ...", url)
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+    except PlaywrightTimeoutError:
+        logger.error("Timed out loading %s — check the URL and your network connection.", url)
+        sys.exit(1)
+    except PlaywrightError as e:
+        logger.error("Could not load %s: %s", url, e)
+        sys.exit(1)
     try:
         await page.wait_for_load_state("networkidle", timeout=15_000)
-    except Exception:
-        print("Network did not reach idle state — continuing anyway.")
+    except PlaywrightTimeoutError:
+        logger.debug("Network did not reach idle state — continuing anyway.")
 
     # Handle password if needed
     if password:
@@ -190,7 +204,7 @@ async def collect_image_urls(page, url: str, password: str | None) -> list[str]:
             continue
         filtered.add(u)
 
-    print(f"Found {len(filtered)} unique image URL(s).")
+    logger.info("Found %d unique image URL(s).", len(filtered))
     return list(filtered)
 
 
@@ -225,7 +239,7 @@ async def download_image(
                             data = await resp.read()
                             filepath.write_bytes(data)
                             size_kb = len(data) / 1024
-                            print(f"  [{index}/{total}] {filename} ({size_kb:.0f} KB)")
+                            logger.info("  [%d/%d] %s (%.0f KB)", index, total, filename, size_kb)
                             return True
                         elif resp.status in (403, 404):
                             return False  # Don't retry on 403/404
@@ -233,7 +247,10 @@ async def download_image(
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
                 else:
-                    print(f"  [{index}/{total}] Failed after {max_retries} retries: {e}")
+                    logger.warning("  [%d/%d] Failed after %d retries: %s", index, total, max_retries, e)
+            except OSError as e:
+                logger.warning("  [%d/%d] Could not write file: %s", index, total, e)
+                return False
         return False
 
     # Try maximized URL first
@@ -251,18 +268,26 @@ async def download_all(urls: list[str], output_dir: Path, concurrent: int) -> No
     output_dir.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrent)
     total = len(urls)
-    print(f"\nDownloading {total} image(s) to {output_dir}/ (concurrency: {concurrent})")
+    logger.info("Downloading %d image(s) to %s/ (concurrency: %d)", total, output_dir, concurrent)
 
     async with aiohttp.ClientSession() as session:
         tasks = [
             download_image(session, url, output_dir, semaphore, i + 1, total)
             for i, url in enumerate(urls)
         ]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    succeeded = sum(1 for r in results if r)
-    failed = total - succeeded
-    print(f"\nDone: {succeeded} downloaded, {failed} failed out of {total} total.")
+    succeeded = 0
+    failed = 0
+    for url, result in zip(urls, results):
+        if isinstance(result, Exception):
+            logger.warning("Unexpected error downloading %s: %s", url, result)
+            failed += 1
+        elif result:
+            succeeded += 1
+        else:
+            failed += 1
+    logger.info("Done: %d downloaded, %d failed out of %d total.", succeeded, failed, total)
 
 
 async def main() -> None:
@@ -270,11 +295,25 @@ async def main() -> None:
         description="Download all images from a Pixieset gallery at maximum resolution."
     )
     parser.add_argument("--url", required=True, help="Pixieset gallery URL")
-    parser.add_argument("--password", default=None, help="Gallery password (if protected)")
+    parser.add_argument("--password", default=None, help="Gallery password (if protected). Exposed in shell history/process list — prefer --ask-password.")
+    parser.add_argument("--ask-password", action="store_true", help="Prompt for the gallery password securely instead of passing it on the command line")
     parser.add_argument("--output", default="./downloads", help="Output directory (default: ./downloads)")
     parser.add_argument("--concurrent", type=int, default=5, help="Concurrent downloads (default: 5)")
     parser.add_argument("--dry-run", action="store_true", help="List found image URLs without downloading")
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument("--quiet", action="store_true", help="Only log warnings and errors")
     args = parser.parse_args()
+
+    log_level = logging.INFO
+    if args.verbose:
+        log_level = logging.DEBUG
+    elif args.quiet:
+        log_level = logging.WARNING
+    logging.basicConfig(level=log_level, format="%(message)s")
+
+    password = args.password
+    if args.ask_password:
+        password = getpass.getpass("Gallery password: ")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -289,19 +328,19 @@ async def main() -> None:
         page = await context.new_page()
 
         try:
-            urls = await collect_image_urls(page, args.url, args.password)
+            urls = await collect_image_urls(page, args.url, password)
         finally:
             await browser.close()
 
     if not urls:
-        print("No images found. The gallery may be empty, the URL may be wrong, or the password may be incorrect.")
+        logger.error("No images found. The gallery may be empty, the URL may be wrong, or the password may be incorrect.")
         sys.exit(1)
 
     if args.dry_run:
-        print(f"\n[Dry run] {len(urls)} image(s) found:\n")
+        logger.info("[Dry run] %d image(s) found:", len(urls))
         for i, url in enumerate(urls, 1):
             max_url, _ = maximize_resolution(url)
-            print(f"  {i}. {max_url}")
+            logger.info("  %d. %s", i, max_url)
         return
 
     await download_all(urls, Path(args.output), args.concurrent)
