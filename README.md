@@ -128,5 +128,9 @@ uv run playwright install chromium
 ## Limitations
 The downloaded images might still retain watermarks and potentially be of lower quality compared to the originals – which is good to support your local photographers!
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 ## License
 This project is licensed under the [MIT License](LICENSE).
